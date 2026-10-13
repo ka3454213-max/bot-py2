@@ -1,5 +1,7 @@
 import os
 import time
+import hmac
+import hashlib
 import requests
 from threading import Thread
 from flask import Flask
@@ -9,36 +11,38 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "MEXC Early Reversal Bot is running live!"
+    return "MEXC Futures Bot is running live 24/7!"
 
-def run_web():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port, use_reloader=False)
+def run_web_server():
+    try:
+        port = int(os.environ.get("PORT", 10000))
+        app.run(host='0.0.0.0', port=port, use_reloader=False)
+    except Exception as e:
+        print(f"Web Server Error: {e}", flush=True)
 
-# Start web server in a separate background thread once
-Thread(target=run_web, daemon=True).start()
+# Start web server in background thread
+Thread(target=run_web_server, daemon=True).start()
 
 # ----------------- 2. CONFIGURATION & CREDENTIALS -----------------
+
 API_KEY = "mx0vglCptKlUtmb07M"       
 SECRET_KEY = "c19530d6d7404a509bdff4975bef5538"   
 
 SYMBOL = "BTC_USDT"
-POLL_INTERVAL_SEC = 10
+POLL_INTERVAL_SEC = 15
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
-    "Content-Type": "application/json"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept": "application/json, text/plain, */*"
 }
 
-# ----------------- 3. MARKET DATA LOGIC -----------------
+# ----------------- 3. MARKET DATA & STRATEGY LOGIC -----------------
 def get_market_data():
     try:
-        url = f"https://contract.mexc.com/api/v1/contract/kline/{SYMBOL}?interval=Min15&limit=60"
+        url = f"https://contract.mexc.com/api/v1/contract/kline/{SYMBOL}?interval=Min15&limit=40"
         response = requests.get(url, headers=HEADERS, timeout=10)
         res_json = response.json()
         
-        # Safe extraction for MEXC API response format
         data = res_json.get("data")
         if res_json.get("success") and isinstance(data, dict):
             closes = data.get("close", [])
@@ -46,7 +50,7 @@ def get_market_data():
             lows = data.get("low", [])
             volumes = data.get("volume", [])
             
-            if closes and len(closes) > 15:
+            if closes and len(closes) > 20:
                 current_price = float(closes[-1])
                 current_volume = float(volumes[-1])
                 avg_volume = sum([float(v) for v in volumes[-15:]]) / 15
@@ -84,9 +88,8 @@ def get_market_data():
     return None
 
 # ----------------- 4. TRADING BOT LOOP -----------------
-def trading_bot():
-    print("ICT Early Reversal Bot Initialized & Scanning...", flush=True)
-    
+def trading_bot_loop():
+    print("ICT Early Reversal Bot Initialized & Scanning Market...", flush=True)
     while True:
         try:
             market = get_market_data()
@@ -98,25 +101,27 @@ def trading_bot():
                 sweep_high = market["sweep_high"]
                 sweep_low = market["sweep_low"]
                 
-                print(f"[Price: ${price:.2f} | RSI: {rsi:.1f} | Vol: {vol:.0f}] Scanning Market Structure...", flush=True)
+                print(f"[Price: ${price:.2f} | RSI: {rsi:.1f} | Vol: {vol:.0f}] Scanning...", flush=True)
                 
                 is_good_volume = vol > (avg_vol * 1.1)
                 
                 if is_good_volume and sweep_low and (32 <= rsi <= 60):
-                    print(f"EARLY REVERSAL LONG SIGNAL DETECTED at ${price:.2f} (Sweep Low + RSI Confirmed)", flush=True)
+                    print(f"EARLY REVERSAL LONG SIGNAL DETECTED at ${price:.2f}", flush=True)
                 
                 elif is_good_volume and sweep_high and (40 <= rsi <= 68):
-                    print(f"EARLY REVERSAL SHORT SIGNAL DETECTED at ${price:.2f} (Sweep High + RSI Confirmed)", flush=True)
+                    print(f"EARLY REVERSAL SHORT SIGNAL DETECTED at ${price:.2f}", flush=True)
                     
         except Exception as e:
-            print(f"Loop Error: {e}", flush=True)
+            print(f"Trading Loop Error: {e}", flush=True)
             
         time.sleep(POLL_INTERVAL_SEC)
 
-# Run trading bot loop in a background thread
-Thread(target=trading_bot, daemon=True).start()
+# Start trading bot in background thread
+Thread(target=trading_bot_loop, daemon=True).start()
 
-# Keep main thread alive for Render web service
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port, use_reloader=False)
+    try:
+        port = int(os.environ.get("PORT", 10000))
+        app.run(host='0.0.0.0', port=port, use_reloader=False)
+    except Exception as e:
+        print(f"Main Process Error: {e}", flush=True)
