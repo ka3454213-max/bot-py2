@@ -4,6 +4,7 @@ import requests
 from threading import Thread
 from flask import Flask
 
+# ----------------- 1. RENDER KEEP-ALIVE WEB SERVER -----------------
 app = Flask(__name__)
 
 @app.route('/')
@@ -12,12 +13,14 @@ def home():
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port, use_reloader=False)
 
+# Start web server in a separate background thread once
 Thread(target=run_web, daemon=True).start()
 
-API_KEY = "mx0vglCptKlUtmb07M"
-SECRET_KEY = "c19530d6d7404a509bdff4975bef5538"
+# ----------------- 2. CONFIGURATION & CREDENTIALS -----------------
+API_KEY = "mx0vglCptKlUtmb07M"       
+SECRET_KEY = "c19530d6d7404a509bdff4975bef5538"   
 
 SYMBOL = "BTC_USDT"
 POLL_INTERVAL_SEC = 10
@@ -28,51 +31,59 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
+# ----------------- 3. MARKET DATA LOGIC -----------------
 def get_market_data():
     try:
         url = f"https://contract.mexc.com/api/v1/contract/kline/{SYMBOL}?interval=Min15&limit=60"
         response = requests.get(url, headers=HEADERS, timeout=10)
-        data = response.json()
+        res_json = response.json()
         
-        if data.get("success") and data.get("data"):
-            klines = data["data"]
-            closes = [float(k["close"]) for k in klines]
-            highs = [float(k["high"]) for k in klines]
-            lows = [float(k["low"]) for k in klines]
-            volumes = [float(k["volume"]) for k in klines]
+        # Safe extraction for MEXC API response format
+        data = res_json.get("data")
+        if res_json.get("success") and isinstance(data, dict):
+            closes = data.get("close", [])
+            highs = data.get("high", [])
+            lows = data.get("low", [])
+            volumes = data.get("volume", [])
             
-            current_price = closes[-1]
-            current_volume = volumes[-1]
-            avg_volume = sum(volumes[-15:]) / 15 if len(volumes) >= 15 else current_volume
-            
-            gains, losses = 0, 0
-            for i in range(-14, 0):
-                change = closes[i] - closes[i-1]
-                if change > 0:
-                    gains += change
-                else:
-                    losses -= change
-            rs = (gains / 14) / (losses / 14) if losses > 0 else 100
-            rsi = 100 - (100 / (1 + rs))
-            
-            recent_high = max(highs[-10:-1])
-            recent_low = min(lows[-10:-1])
-            
-            sweep_high = highs[-1] > recent_high and current_price < recent_high
-            sweep_low = lows[-1] < recent_low and current_price > recent_low
-            
-            return {
-                "price": current_price,
-                "rsi": rsi,
-                "volume": current_volume,
-                "avg_volume": avg_volume,
-                "sweep_high": sweep_high,
-                "sweep_low": sweep_low
-            }
+            if closes and len(closes) > 15:
+                current_price = float(closes[-1])
+                current_volume = float(volumes[-1])
+                avg_volume = sum([float(v) for v in volumes[-15:]]) / 15
+                
+                # RSI Calculation (14 periods)
+                gains, losses = 0, 0
+                float_closes = [float(c) for c in closes]
+                for i in range(-14, 0):
+                    change = float_closes[i] - float_closes[i-1]
+                    if change > 0:
+                        gains += change
+                    else:
+                        losses -= change
+                rs = (gains / 14) / (losses / 14) if losses > 0 else 100
+                rsi = 100 - (100 / (1 + rs))
+                
+                float_highs = [float(h) for h in highs]
+                float_lows = [float(l) for l in lows]
+                recent_high = max(float_highs[-10:-1])
+                recent_low = min(float_lows[-10:-1])
+                
+                sweep_high = float_highs[-1] > recent_high and current_price < recent_high
+                sweep_low = float_lows[-1] < recent_low and current_price > recent_low
+                
+                return {
+                    "price": current_price,
+                    "rsi": rsi,
+                    "volume": current_volume,
+                    "avg_volume": avg_volume,
+                    "sweep_high": sweep_high,
+                    "sweep_low": sweep_low
+                }
     except Exception as e:
         print(f"Market Data Error: {e}", flush=True)
     return None
 
+# ----------------- 4. TRADING BOT LOOP -----------------
 def trading_bot():
     print("ICT Early Reversal Bot Initialized & Scanning...", flush=True)
     
@@ -102,8 +113,10 @@ def trading_bot():
             
         time.sleep(POLL_INTERVAL_SEC)
 
+# Run trading bot loop in a background thread
 Thread(target=trading_bot, daemon=True).start()
 
+# Keep main thread alive for Render web service
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port, use_reloader=False)
