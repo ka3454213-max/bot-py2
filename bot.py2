@@ -1,7 +1,5 @@
 import os
 import time
-import hmac
-import hashlib
 import requests
 from threading import Thread
 from flask import Flask
@@ -20,11 +18,9 @@ def run_web_server():
     except Exception as e:
         print(f"Web Server Error: {e}", flush=True)
 
-# Start web server in background thread
 Thread(target=run_web_server, daemon=True).start()
 
-# ----------------- 2. CONFIGURATION & CREDENTIALS -----------------
-
+# ----------------- 2. CONFIGURATION -----------------
 API_KEY = "mx0vglCptKlUtmb07M"       
 SECRET_KEY = "c19530d6d7404a509bdff4975bef5538"   
 
@@ -39,50 +35,69 @@ HEADERS = {
 # ----------------- 3. MARKET DATA & STRATEGY LOGIC -----------------
 def get_market_data():
     try:
-        url = f"https://contract.mexc.com/api/v1/contract/kline/{SYMBOL}?interval=Min15&limit=40"
+        url = f"https://contract.mexc.com/api/v1/contract/kline/{SYMBOL}?interval=Min15&limit=50"
         response = requests.get(url, headers=HEADERS, timeout=10)
         res_json = response.json()
         
         data = res_json.get("data")
-        if res_json.get("success") and isinstance(data, dict):
-            closes = data.get("close", [])
-            highs = data.get("high", [])
-            lows = data.get("low", [])
-            volumes = data.get("volume", [])
+        if res_json.get("success") and data:
+            closes, highs, lows, volumes = [], [], [], []
             
-            if closes and len(closes) > 20:
-                current_price = float(closes[-1])
-                current_volume = float(volumes[-1])
-                avg_volume = sum([float(v) for v in volumes[-15:]]) / 15
+            # Safe parsing for MEXC API format variations
+            if isinstance(data, dict):
+                closes = data.get("close", [])
+                highs = data.get("high", [])
+                lows = data.get("low", [])
+                volumes = data.get("volume", [])
+            elif isinstance(data, list):
+                for item in data:
+                    if isinstance(item, dict):
+                        closes.append(item.get("close", 0))
+                        highs.append(item.get("high", 0))
+                        lows.append(item.get("low", 0))
+                        volumes.append(item.get("vol", 0))
+                    elif isinstance(item, list) and len(item) > 5:
+                        closes.append(item[4])
+                        highs.append(item[2])
+                        lows.append(item[3])
+                        volumes.append(item[5])
+            
+            if closes and len(closes) >= 15:
+                float_closes = [float(c) for c in closes if c is not None]
+                float_highs = [float(h) for h in highs if h is not None]
+                float_lows = [float(l) for l in lows if l is not None]
+                float_vols = [float(v) for v in volumes if v is not None]
                 
-                # RSI Calculation (14 periods)
-                gains, losses = 0, 0
-                float_closes = [float(c) for c in closes]
-                for i in range(-14, 0):
-                    change = float_closes[i] - float_closes[i-1]
-                    if change > 0:
-                        gains += change
-                    else:
-                        losses -= change
-                rs = (gains / 14) / (losses / 14) if losses > 0 else 100
-                rsi = 100 - (100 / (1 + rs))
-                
-                float_highs = [float(h) for h in highs]
-                float_lows = [float(l) for l in lows]
-                recent_high = max(float_highs[-10:-1])
-                recent_low = min(float_lows[-10:-1])
-                
-                sweep_high = float_highs[-1] > recent_high and current_price < recent_high
-                sweep_low = float_lows[-1] < recent_low and current_price > recent_low
-                
-                return {
-                    "price": current_price,
-                    "rsi": rsi,
-                    "volume": current_volume,
-                    "avg_volume": avg_volume,
-                    "sweep_high": sweep_high,
-                    "sweep_low": sweep_low
-                }
+                if len(float_closes) >= 15:
+                    current_price = float_closes[-1]
+                    current_volume = float_vols[-1] if float_vols else 0
+                    avg_volume = sum(float_vols[-15:]) / 15 if len(float_vols) >= 15 else current_volume
+                    
+                    # RSI Calculation (14 periods)
+                    gains, losses = 0, 0
+                    for i in range(-14, 0):
+                        change = float_closes[i] - float_closes[i-1]
+                        if change > 0:
+                            gains += change
+                        else:
+                            losses -= change
+                    rs = (gains / 14) / (losses / 14) if losses > 0 else 100
+                    rsi = 100 - (100 / (1 + rs))
+                    
+                    recent_high = max(float_highs[-10:-1]) if len(float_highs) >= 10 else float_highs[-1]
+                    recent_low = min(float_lows[-10:-1]) if len(float_lows) >= 10 else float_lows[-1]
+                    
+                    sweep_high = float_highs[-1] > recent_high and current_price < recent_high
+                    sweep_low = float_lows[-1] < recent_low and current_price > recent_low
+                    
+                    return {
+                        "price": current_price,
+                        "rsi": rsi,
+                        "volume": current_volume,
+                        "avg_volume": avg_volume,
+                        "sweep_high": sweep_high,
+                        "sweep_low": sweep_low
+                    }
     except Exception as e:
         print(f"Market Data Error: {e}", flush=True)
     return None
@@ -110,13 +125,14 @@ def trading_bot_loop():
                 
                 elif is_good_volume and sweep_high and (40 <= rsi <= 68):
                     print(f"EARLY REVERSAL SHORT SIGNAL DETECTED at ${price:.2f}", flush=True)
+            else:
+                print("Waiting for valid market data...", flush=True)
                     
         except Exception as e:
             print(f"Trading Loop Error: {e}", flush=True)
             
         time.sleep(POLL_INTERVAL_SEC)
 
-# Start trading bot in background thread
 Thread(target=trading_bot_loop, daemon=True).start()
 
 if __name__ == "__main__":
