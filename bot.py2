@@ -1,5 +1,7 @@
 import os
 import time
+import hmac
+import hashlib
 import requests
 from threading import Thread
 from flask import Flask
@@ -9,33 +11,83 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "MEXC Futures Bot is running live 24/7!"
+    return "MEXC Futures Automated Trading Bot is Running 24/7!"
 
 def run_web_server():
-    try:
-        port = int(os.environ.get("PORT", 10000))
-        app.run(host='0.0.0.0', port=port, use_reloader=False)
-    except Exception as e:
-        print(f"Web Server Error: {e}", flush=True)
+    while True:
+        try:
+            port = int(os.environ.get("PORT", 10000))
+            app.run(host='0.0.0.0', port=port, use_reloader=False)
+        except Exception as e:
+            print(f"Web Server Restarting due to error: {e}", flush=True)
+            time.sleep(5)
 
+# Start web server in a resilient background thread
 Thread(target=run_web_server, daemon=True).start()
 
-# ----------------- 2. CONFIGURATION -----------------
-API_KEY = "mx0vglCptKlUtmb07M"       
-SECRET_KEY = "c19530d6d7404a509bdff4975bef5538"   
+# ----------------- 2. CONFIGURATION & CREDENTIALS -----------------
+API_KEY = "mx0vglCptKlUtmb07M"
+SECRET_KEY = "c19530d6d7404a509bdff4975bef5538" 
 
 SYMBOL = "BTC_USDT"
 POLL_INTERVAL_SEC = 15
+BASE_URL = "https://contract.mexc.com"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Accept": "application/json, text/plain, */*"
 }
 
-# ----------------- 3. MARKET DATA & STRATEGY LOGIC -----------------
+# ----------------- 3. MEXC API ORDER PLACEMENT -----------------
+def place_mexc_order(side, price, size=0.01):
+    """
+    side: 1 for Long (Buy), 3 for Short (Sell)
+    """
+    if API_KEY == "your_mexc_api_key_here":
+        print("[SIMULATION MODE] API Keys not set. Trade signal detected but order skipped.", flush=True)
+        return False
+        
+    try:
+        endpoint = "/api/v1/private/order/submit"
+        timestamp = str(int(time.time() * 1000))
+        
+        params = {
+            "symbol": SYMBOL,
+            "side": side,          # 1: Open Long, 3: Open Short
+            "openType": 1,         # 1: Isolated
+            "type": 5,             # Market Order
+            "vol": size,
+            "leverage": 10
+        }
+        
+        query_string = f"symbol={SYMBOL}&side={side}&openType=1&type=5&vol={size}&leverage=10&timestamp={timestamp}"
+        signature = hmac.new(SECRET_KEY.encode('utf-8'), query_string.encode('utf-8'), hashlib.sha256).hexdigest()
+        
+        auth_headers = HEADERS.copy()
+        auth_headers.update({
+            "ApiKey": API_KEY,
+            "Request-Time": timestamp,
+            "Sign": signature,
+            "Content-Type": "application/json"
+        })
+        
+        response = requests.post(BASE_URL + endpoint, json=params, headers=auth_headers, timeout=10)
+        res_data = response.json()
+        
+        if res_data.get("success"):
+            print(f">>> LIVE TRADE EXECUTED SUCCESSFULLY! Side: {side} | Price: ${price}", flush=True)
+            return True
+        else:
+            print(f"Trade Failed: {res_data.get('message')}", flush=True)
+            
+    except Exception as e:
+        print(f"Order Placement Exception: {e}", flush=True)
+    return False
+
+# ----------------- 4. MARKET DATA & STRATEGY LOGIC -----------------
 def get_market_data():
     try:
-        url = f"https://contract.mexc.com/api/v1/contract/kline/{SYMBOL}?interval=Min15&limit=50"
+        url = f"{BASE_URL}/api/v1/contract/kline/{SYMBOL}?interval=Min15&limit=50"
         response = requests.get(url, headers=HEADERS, timeout=10)
         res_json = response.json()
         
@@ -43,7 +95,6 @@ def get_market_data():
         if res_json.get("success") and data:
             closes, highs, lows, volumes = [], [], [], []
             
-            # Safe parsing for MEXC API format variations
             if isinstance(data, dict):
                 closes = data.get("close", [])
                 highs = data.get("high", [])
@@ -102,9 +153,9 @@ def get_market_data():
         print(f"Market Data Error: {e}", flush=True)
     return None
 
-# ----------------- 4. TRADING BOT LOOP -----------------
+# ----------------- 5. BULLETPROOF TRADING LOOP -----------------
 def trading_bot_loop():
-    print("ICT Early Reversal Bot Initialized & Scanning Market...", flush=True)
+    print("ICT 24/7 Automated Trading Bot Initialized & Running...", flush=True)
     while True:
         try:
             market = get_market_data()
@@ -116,28 +167,28 @@ def trading_bot_loop():
                 sweep_high = market["sweep_high"]
                 sweep_low = market["sweep_low"]
                 
-                print(f"[Price: ${price:.2f} | RSI: {rsi:.1f} | Vol: {vol:.0f}] Scanning...", flush=True)
+                print(f"[Price: ${price:.2f} | RSI: {rsi:.1f} | Vol: {vol:.0f}] Scanning Market...", flush=True)
                 
                 is_good_volume = vol > (avg_vol * 1.1)
                 
                 if is_good_volume and sweep_low and (32 <= rsi <= 60):
-                    print(f"EARLY REVERSAL LONG SIGNAL DETECTED at ${price:.2f}", flush=True)
+                    print(f"EARLY REVERSAL LONG SIGNAL at ${price:.2f}", flush=True)
+                    place_mexc_order(side=1, price=price) # Long
                 
                 elif is_good_volume and sweep_high and (40 <= rsi <= 68):
-                    print(f"EARLY REVERSAL SHORT SIGNAL DETECTED at ${price:.2f}", flush=True)
+                    print(f"EARLY REVERSAL SHORT SIGNAL at ${price:.2f}", flush=True)
+                    place_mexc_order(side=3, price=price) # Short
             else:
-                print("Waiting for valid market data...", flush=True)
+                print("Retrying market data fetch...", flush=True)
                     
         except Exception as e:
-            print(f"Trading Loop Error: {e}", flush=True)
+            print(f"Trading Loop Recovered from Error: {e}", flush=True)
             
         time.sleep(POLL_INTERVAL_SEC)
 
+# Start trading bot in a safe background thread
 Thread(target=trading_bot_loop, daemon=True).start()
 
 if __name__ == "__main__":
-    try:
-        port = int(os.environ.get("PORT", 10000))
-        app.run(host='0.0.0.0', port=port, use_reloader=False)
-    except Exception as e:
-        print(f"Main Process Error: {e}", flush=True)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port, use_reloader=False)
